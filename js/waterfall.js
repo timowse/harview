@@ -128,6 +128,9 @@ const Waterfall = (() => {
     tr.title = entry.url || '';
     tr.setAttribute('role', 'row');
     tr.setAttribute('tabindex', '0');
+    // Stagger animation: cap at 50 to prevent long delays on large HARs
+    tr.style.setProperty('--row-index', Math.min(idx, 50));
+    tr.style.cursor = 'pointer';
 
     // Click: deselect others, select this row, dispatch event
     const _handleSelect = () => {
@@ -294,11 +297,11 @@ const Waterfall = (() => {
     wrap.className = 'wf-legend';
 
     const phases = [
-      { label: 'DNS',      color: PHASE_COLORS.dns     },
-      { label: 'TCP',      color: PHASE_COLORS.tcp     },
-      { label: 'TLS',      color: PHASE_COLORS.tls     },
-      { label: 'Wait/TTFB',color: PHASE_COLORS.wait    },
-      { label: 'Receive',  color: PHASE_COLORS.receive },
+      { label: 'DNS',      color: PHASE_COLORS.dns,     term: 'dns'  },
+      { label: 'TCP',      color: PHASE_COLORS.tcp,     term: 'tcp'  },
+      { label: 'TLS',      color: PHASE_COLORS.tls,     term: 'tls'  },
+      { label: 'Wait/TTFB',color: PHASE_COLORS.wait,    term: null   },
+      { label: 'Receive',  color: PHASE_COLORS.receive, term: null   },
     ];
 
     phases.forEach(p => {
@@ -310,7 +313,17 @@ const Waterfall = (() => {
       dot.style.background = p.color;
 
       item.appendChild(dot);
-      item.appendChild(document.createTextNode(p.label));
+
+      if (p.term) {
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'term';
+        labelSpan.dataset.term = p.term;
+        labelSpan.textContent = p.label;
+        item.appendChild(labelSpan);
+      } else {
+        item.appendChild(document.createTextNode(p.label));
+      }
+
       wrap.appendChild(item);
     });
 

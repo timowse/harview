@@ -1,36 +1,181 @@
 /**
  * inspector.js — Request / Response detail panel
  *
- * New API:  Inspector.init(containerEl)
- *           Mounts the panel into containerEl and listens for
- *           'entry:select' CustomEvents on document.
+ * Public API:
+ *   Inspector.init(containerEl)
+ *   Inspector.show(entry, redactSet)
+ *   Inspector.clear()
  *
- * Legacy:   Inspector.show(entry, redactSet)  — called directly by main.js
- *           Inspector.clear()
+ * Dispatches 'entry:select' CustomEvents from waterfall.js.
  */
 
 'use strict';
 
+// ── Copy icon SVG (12x12) ────────────────────────────────────────────────────
+const COPY_ICON_SVG = "<svg width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='currentColor' stroke-width='1.5'><rect x='4' y='4' width='7' height='7' rx='1'/><path d='M3 8H2a1 1 0 01-1-1V2a1 1 0 011-1h5a1 1 0 011 1v1'/></svg>";
+
 const Inspector = (() => {
 
-  // Sensitive header names (always highlighted in the UI)
+  // ── Sensitive header names ───────────────────────────────────────────────────
   const SENSITIVE = new Set([
     'authorization', 'cookie', 'set-cookie', 'x-api-key', 'x-auth-token',
   ]);
 
+  // ── Term tooltip dictionary ──────────────────────────────────────────────────
+  const TERM_TOOLTIPS = {
+    'user-agent':      'Browser and OS identification sent with every request',
+    'authorization':   'Credential token (Bearer, Basic) — often sensitive',
+    'cookie':          'Session identifiers stored in browser — often sensitive',
+    'set-cookie':      'Server instruction to store a cookie in the browser',
+    'content-type':    'Format of the body (e.g. application/json)',
+    'cache-control':   'Caching directives for browsers and proxies',
+    'accept':          'Media types the client is willing to receive',
+    'referer':         'URL of the page that initiated this request',
+    'x-api-key':       'API authentication key — sensitive',
+    'origin':          'Scheme+host+port that initiated the request',
+    'content-length':  'Size of the response body in bytes',
+    'location':        'Redirect destination URL',
+    'x-request-id':    'Unique identifier for this request (for tracing)',
+    'x-forwarded-for': 'Original client IP when behind a proxy',
+    'dns':             'Domain Name System lookup — resolves hostname to IP address',
+    'tcp':             'Transmission Control Protocol — establishes the connection',
+    'tls':             'Transport Layer Security — encrypts the connection (HTTPS)',
+    'ttfb':            'Time to First Byte — server processing + network latency',
+    'receive':         'Time to download the response body',
+  };
+
+  // ── Tooltip singleton ────────────────────────────────────────────────────────
+  const _tooltip = (() => {
+    let el = null;
+
+    function _ensureEl() {
+      if (el && document.body.contains(el)) return el;
+      el = document.getElementById('term-tooltip');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'term-tooltip';
+        el.setAttribute('role', 'tooltip');
+        el.innerHTML = '<span class="tt-term"></span><span class="tt-body"></span>';
+        document.body.appendChild(el);
+      }
+      return el;
+    }
+
+    let _hideTimer = null;
+
+    function show(termEl, termKey) {
+      const text = TERM_TOOLTIPS[termKey.toLowerCase()];
+      if (!text) return;
+
+      const tip = _ensureEl();
+      clearTimeout(_hideTimer);
+
+      tip.querySelector('.tt-term').textContent = termKey.toUpperCase();
+      tip.querySelector('.tt-body').textContent = text;
+
+      // Position above element, clamped to viewport
+      const rect = termEl.getBoundingClientRect();
+      const tipW = 240;
+
+      tip.style.visibility = 'hidden';
+      tip.style.opacity    = '0';
+      tip.classList.remove('visible');
+      tip.style.left       = rect.left + 'px';
+      tip.style.top        = '0px';
+      document.body.appendChild(tip);
+
+      const tipH = tip.offsetHeight;
+      const vpW  = window.innerWidth;
+
+      let left = rect.left;
+      let top;
+
+      // Clamp horizontal
+      if (left + tipW > vpW - 8) left = vpW - tipW - 8;
+      if (left < 8)               left = 8;
+
+      // Prefer above; fall back to below
+      if (rect.top - tipH - 8 < 0) {
+        top = rect.bottom + 6;
+      } else {
+        top = rect.top - tipH - 6;
+      }
+
+      tip.style.left       = left + 'px';
+      tip.style.top        = top  + 'px';
+      tip.style.visibility = 'visible';
+      tip.classList.add('visible');
+    }
+
+    function hide(delay) {
+      if (delay === undefined) delay = 80;
+      _hideTimer = setTimeout(() => {
+        const tip = _ensureEl();
+        tip.classList.remove('visible');
+      }, delay);
+    }
+
+    return { show, hide };
+  })();
+
+  // ── Bind tooltip to a .term element ─────────────────────────────────────────
+  function _bindTooltip(termEl, termKey) {
+    termEl.dataset.term = termKey;
+    termEl.addEventListener('mouseenter', () => _tooltip.show(termEl, termKey));
+    termEl.addEventListener('mouseleave', () => _tooltip.hide());
+  }
+
+  // ── Click-to-copy helper ─────────────────────────────────────────────────────
+  function _bindCopyBtn(btn, getValueFn) {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+
+      const value = typeof getValueFn === 'function' ? getValueFn() : getValueFn;
+
+      try {
+        await navigator.clipboard.writeText(value);
+      } catch (_) {
+        // Fallback for non-secure contexts
+        const ta = document.createElement('textarea');
+        ta.value = value;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+
+      // Green flash on icon
+      btn.classList.add('copied');
+      setTimeout(() => btn.classList.remove('copied'), 600);
+
+      // Inject floating toast at cursor position
+      const toast = document.createElement('div');
+      toast.className = 'copy-toast';
+      toast.textContent = 'Copied!';
+      toast.style.cssText =
+        'position:fixed;z-index:9999;pointer-events:none;' +
+        'left:' + (e.clientX + 12) + 'px;' +
+        'top:'  + (e.clientY - 28) + 'px;';
+      document.body.appendChild(toast);
+
+      setTimeout(() => {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 1500);
+    });
+  }
+
+  // ── Module state ─────────────────────────────────────────────────────────────
   let _containerEl  = null;
   let _activeTab    = 'headers';
   let _currentEntry = null;
 
-  // ── init ───────────────────────────────────────────────────────────────────
+  // ── init ─────────────────────────────────────────────────────────────────────
   function init(containerEl) {
     _containerEl = containerEl;
     _showPlaceholder();
 
-    // Listen for entry selection events dispatched on document
     document.addEventListener('entry:select', e => {
-      // waterfall.js dispatches { detail: entry } directly;
-      // support both { detail: entry } and { detail: { entry, redactSet } }
       const payload = e.detail;
       _currentEntry = (payload && payload.entry) ? payload.entry : payload;
       const redactSet = (payload && payload.redactSet) || new Set();
@@ -38,7 +183,7 @@ const Inspector = (() => {
     });
   }
 
-  // ── show (legacy / direct call) ────────────────────────────────────────────
+  // ── show (legacy / direct call) ──────────────────────────────────────────────
   function show(entry, redactSet) {
     _currentEntry = entry;
     const target  = _containerEl || document.getElementById('inspector-panel');
@@ -46,14 +191,14 @@ const Inspector = (() => {
     _buildPanel(target, entry, redactSet || new Set());
   }
 
-  // ── clear ──────────────────────────────────────────────────────────────────
+  // ── clear ────────────────────────────────────────────────────────────────────
   function clear() {
     _currentEntry = null;
     const target = _containerEl || document.getElementById('inspector-panel');
     if (target) _showPlaceholder(target);
   }
 
-  // ── Internal helpers ───────────────────────────────────────────────────────
+  // ── Placeholder ──────────────────────────────────────────────────────────────
   function _showPlaceholder(el) {
     const target = el || _containerEl;
     if (!target) return;
@@ -63,13 +208,17 @@ const Inspector = (() => {
     target.appendChild(p);
   }
 
-  // ── Main panel builder ─────────────────────────────────────────────────────
+  // ── Main panel builder ───────────────────────────────────────────────────────
   function _buildPanel(container, entry, redactSet) {
     container.innerHTML = '';
+
+    // Wrap all content in .inspector-panel-content so CSS slide-in fires each time
+    const content = _mk('div', 'inspector-panel-content');
+
     _activeTab = _activeTab || 'headers';
 
     // Summary strip
-    container.appendChild(_buildSummary(entry));
+    content.appendChild(_buildSummary(entry));
 
     // Tab bar
     const tabs   = ['headers', 'timings', 'preview'];
@@ -89,30 +238,29 @@ const Inspector = (() => {
       });
       tabBar.appendChild(btn);
     });
-    container.appendChild(tabBar);
+    content.appendChild(tabBar);
 
     // Build each tab panel
     const headersPanel = _buildHeadersPanel(entry, redactSet);
-    headersPanel.classList.add('inspector-tab-panel');
-    if (_activeTab !== 'headers') headersPanel.classList.add('hidden');
+    headersPanel.className = 'tab-panel' + (_activeTab !== 'headers' ? ' hidden' : '');
     panels['headers'] = headersPanel;
 
     const timingsPanel = _buildTimingsPanel(entry);
-    timingsPanel.classList.add('inspector-tab-panel');
-    if (_activeTab !== 'timings') timingsPanel.classList.add('hidden');
+    timingsPanel.className = 'tab-panel' + (_activeTab !== 'timings' ? ' hidden' : '');
     panels['timings'] = timingsPanel;
 
     const previewPanel = _buildPreviewPanel(entry);
-    previewPanel.classList.add('inspector-tab-panel');
-    if (_activeTab !== 'preview') previewPanel.classList.add('hidden');
+    previewPanel.className = 'tab-panel' + (_activeTab !== 'preview' ? ' hidden' : '');
     panels['preview'] = previewPanel;
 
-    container.appendChild(headersPanel);
-    container.appendChild(timingsPanel);
-    container.appendChild(previewPanel);
+    content.appendChild(headersPanel);
+    content.appendChild(timingsPanel);
+    content.appendChild(previewPanel);
+
+    container.appendChild(content);
   }
 
-  // ── Summary strip ──────────────────────────────────────────────────────────
+  // ── Summary strip ────────────────────────────────────────────────────────────
   function _buildSummary(e) {
     const div    = _mk('div', 'inspector-summary');
     const status = e.status || 0;
@@ -133,7 +281,7 @@ const Inspector = (() => {
     return div;
   }
 
-  // ── HEADERS tab ────────────────────────────────────────────────────────────
+  // ── HEADERS tab ──────────────────────────────────────────────────────────────
   function _buildHeadersPanel(entry, redactSet) {
     const panel = _mk('div');
     panel.appendChild(_buildHeadersSection('Request Headers',  entry.requestHeaders,  redactSet));
@@ -145,7 +293,6 @@ const Inspector = (() => {
     const section = _mk('div', 'inspector-section');
     const h       = _mk('h4', 'inspector-section-title');
 
-    // Collapsible toggle
     let collapsed = false;
     h.textContent  = title;
     h.style.cursor = 'pointer';
@@ -164,56 +311,70 @@ const Inspector = (() => {
       em.textContent = 'No headers.';
       body.appendChild(em);
     } else {
-      const table = _mk('table', 'headers-table');
+      const list = _mk('div', 'hdr-list');
 
       entries.forEach(([name, value]) => {
         const nameLower   = name.toLowerCase();
         const isSensitive = SENSITIVE.has(nameLower) || (redactSet && redactSet.has(nameLower));
 
-        const tr    = _mk('tr', 'header-row' + (isSensitive ? ' header-sensitive' : ''));
-        const tdName = _mk('td', 'header-name');
-        const tdVal  = _mk('td', 'header-value');
+        // Build header row div
+        const row = _mk('div', 'header-row' + (isSensitive ? ' sensitive' : ''));
 
-        tdName.textContent = name;
+        // Key span — add .term class if in TERM_TOOLTIPS
+        const keySpan = _mk('span', 'header-key' + (TERM_TOOLTIPS[nameLower] ? ' term' : ''));
+        keySpan.textContent = name;
+        if (TERM_TOOLTIPS[nameLower]) {
+          _bindTooltip(keySpan, nameLower);
+        }
 
+        // Colon separator
+        const colonSpan = _mk('span', 'header-colon');
+        colonSpan.textContent = ':';
+
+        // Value span
+        let currentValue = value;
+        const valSpan = _mk('span', 'header-value');
+        valSpan.textContent = value;
+
+        // Copy button
+        const copyBtn = _mk('button', 'btn-copy');
+        copyBtn.type = 'button';
+        copyBtn.title = 'Copy value';
+        copyBtn.setAttribute('aria-label', 'Copy');
+        copyBtn.innerHTML = COPY_ICON_SVG;
+        _bindCopyBtn(copyBtn, () => currentValue);
+
+        row.appendChild(keySpan);
+        row.appendChild(colonSpan);
+        row.appendChild(valSpan);
+        row.appendChild(copyBtn);
+
+        // Redact button for sensitive headers
         if (isSensitive) {
-          // Highlight header name in red
-          tdName.style.color = '#c94040';
-
-          // Value span (also red) + Redact button
-          const valueSpan = _mk('span', 'header-value-text');
-          valueSpan.textContent = value;
-          valueSpan.style.color = '#c94040';
-
           const redactBtn = _mk('button', 'btn-redact');
           redactBtn.type        = 'button';
           redactBtn.textContent = 'Redact';
           redactBtn.addEventListener('click', () => {
-            valueSpan.textContent = '[REDACTED]';
+            currentValue          = '████████';
+            valSpan.textContent   = currentValue;
             redactBtn.disabled    = true;
             redactBtn.textContent = 'Redacted';
-            tr.classList.add('header-redacted');
+            row.classList.add('header-redacted');
           });
-
-          tdVal.appendChild(valueSpan);
-          tdVal.appendChild(redactBtn);
-        } else {
-          tdVal.textContent = value;
+          row.appendChild(redactBtn);
         }
 
-        tr.appendChild(tdName);
-        tr.appendChild(tdVal);
-        table.appendChild(tr);
+        list.appendChild(row);
       });
 
-      body.appendChild(table);
+      body.appendChild(list);
     }
 
     section.appendChild(body);
     return section;
   }
 
-  // ── TIMINGS tab ────────────────────────────────────────────────────────────
+  // ── TIMINGS tab ──────────────────────────────────────────────────────────────
   function _buildTimingsPanel(entry) {
     const panel   = _mk('div', 'inspector-section');
     const h       = _mk('h4', 'inspector-section-title');
@@ -224,35 +385,57 @@ const Inspector = (() => {
     const total   = entry.totalTime || 1;
 
     const phases = [
-      { key: 'dns',     label: 'DNS',          color: 'var(--t-dns)'  },
-      { key: 'connect', label: 'TCP Connect',   color: 'var(--t-conn)' },
-      { key: 'ssl',     label: 'TLS / SSL',     color: '#c97dd4'       },
-      { key: 'wait',    label: 'Wait (TTFB)',    color: 'var(--t-wait)' },
-      { key: 'receive', label: 'Receive',        color: 'var(--t-recv)' },
-      { key: 'blocked', label: 'Blocked',        color: 'var(--text-3)' },
-      { key: 'send',    label: 'Send',           color: 'var(--accent)' },
+      { key: 'dns',     label: 'DNS',        color: '#9b72cf',        term: 'dns'     },
+      { key: 'tcp',     label: 'TCP',         color: '#5ba3dc',        term: 'tcp'     },
+      { key: 'tls',     label: 'TLS',         color: '#c97dd4',        term: 'tls'     },
+      { key: 'wait',    label: 'Wait (TTFB)', color: '#e8a838',        term: 'ttfb'    },
+      { key: 'receive', label: 'Receive',     color: '#3dba7a',        term: 'receive' },
+      { key: 'blocked', label: 'Blocked',     color: 'var(--text-3)',  term: null      },
+      { key: 'send',    label: 'Send',        color: 'var(--accent)',  term: null      },
     ];
 
+    // Support old naming from HAR parser (connect/ssl)
+    if (timings.tcp === undefined && timings.connect !== undefined) {
+      timings.tcp = timings.connect;
+    }
+    if (timings.tls === undefined && timings.ssl !== undefined) {
+      timings.tls = timings.ssl;
+    }
+
     const table = _mk('table', 'timing-table');
+
+    let shownTotal = 0;
 
     phases.forEach(function(phase) {
       const ms = (timings[phase.key] !== undefined) ? timings[phase.key] : -1;
       if (ms < 0) return;
-      const pct = Math.min(100, (ms / total) * 100).toFixed(1);
+
+      shownTotal += ms;
+
+      const barW = Math.round(Math.min(120, (ms / total) * 120));
 
       const tr = _mk('tr', 'timing-row');
 
-      const tdLabel = _mk('td', 'timing-label');
-      tdLabel.textContent = phase.label;
+      // Label cell — possibly with tooltip
+      const tdLabel = _mk('td', 'timing-label-cell');
+      const labelSpan = _mk('span', phase.term ? 'timing-label term' : 'timing-label');
+      labelSpan.textContent = phase.label;
+      if (phase.term && TERM_TOOLTIPS[phase.term]) {
+        _bindTooltip(labelSpan, phase.term);
+      }
+      tdLabel.appendChild(labelSpan);
 
+      // Mini-bar cell
       const tdBar = _mk('td', 'timing-bar-cell');
-      const track = _mk('div', 'timing-bar-track');
-      const fill  = _mk('div', 'timing-bar-fill');
-      fill.style.width      = pct + '%';
-      fill.style.background = phase.color;
-      track.appendChild(fill);
-      tdBar.appendChild(track);
+      const barEl = _mk('div', 'timing-mini-bar');
+      barEl.style.cssText =
+        'display:inline-block;height:8px;border-radius:2px;' +
+        'width:' + barW + 'px;' +
+        'background:' + phase.color + ';' +
+        'vertical-align:middle;';
+      tdBar.appendChild(barEl);
 
+      // Value cell
       const tdVal = _mk('td', 'timing-value');
       tdVal.textContent = _fmtMs(ms);
 
@@ -264,13 +447,13 @@ const Inspector = (() => {
 
     // Total row
     const totalRow = _mk('tr', 'timing-total-row');
-    const ttdLabel = _mk('td', 'timing-label');
+    const ttdLabel = _mk('td', 'timing-label-cell');
     ttdLabel.innerHTML = '<strong>Total</strong>';
-    const ttdEmpty = _mk('td');
+    const ttdBar   = _mk('td', 'timing-bar-cell');
     const ttdVal   = _mk('td', 'timing-value');
     ttdVal.innerHTML = '<strong>' + _fmtMs(entry.totalTime) + '</strong>';
     totalRow.appendChild(ttdLabel);
-    totalRow.appendChild(ttdEmpty);
+    totalRow.appendChild(ttdBar);
     totalRow.appendChild(ttdVal);
     table.appendChild(totalRow);
 
@@ -278,7 +461,7 @@ const Inspector = (() => {
     return panel;
   }
 
-  // ── PREVIEW tab ────────────────────────────────────────────────────────────
+  // ── PREVIEW tab ──────────────────────────────────────────────────────────────
   function _buildPreviewPanel(entry) {
     const panel   = _mk('div', 'inspector-section');
     const h       = _mk('h4', 'inspector-section-title');
@@ -308,7 +491,7 @@ const Inspector = (() => {
     return panel;
   }
 
-  // ── DOM / formatting helpers ───────────────────────────────────────────────
+  // ── DOM / formatting helpers ─────────────────────────────────────────────────
   function _mk(tag, cls) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -325,14 +508,14 @@ const Inspector = (() => {
 
   function _fmtMs(ms) {
     if (ms == null || ms < 0) return 'n/a';
-    return ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(2) + ' s';
+    return ms < 1000 ? Math.round(ms) + '\u202fms' : (ms / 1000).toFixed(2) + '\u202fs';
   }
 
   function _fmtBytes(b) {
     if (b <= 0) return '0 B';
     const u = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(b) / Math.log(1024));
-    return (b / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + u[i];
+    return (b / Math.pow(1024, i)).toFixed(i ? 1 : 0) + '\u202f' + u[i];
   }
 
   return { init, show, clear };
