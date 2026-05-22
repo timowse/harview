@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>harview — HAR File Inspector</title>
+  <meta name="description" content="Privacy-first HAR file inspector. Waterfall charts, request filtering, header redaction. 100% client-side." />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+  <!-- ─── Loading spinner ──────────────────────────────────────────────── -->
+  <div id="loading-spinner" class="hidden">
+    <div class="spinner-ring"></div>
+  </div>
+
+  <!-- ─── Error / warning banner ───────────────────────────────────────── -->
+  <div id="error-banner" class="hidden">
+    <span id="error-text"></span>
+    <button id="error-close" class="btn-icon" aria-label="Dismiss">×</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       LANDING VIEW  (shown before a HAR is loaded)
+  ════════════════════════════════════════════════════════════════════════ -->
+  <div id="landing-view">
+    <header class="landing-header">
+      <div class="logo">
+        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true">
+          <rect width="36" height="36" rx="8" fill="#6366f1"/>
+          <rect x="6" y="10" width="14" height="3" rx="1.5" fill="white" opacity=".9"/>
+          <rect x="6" y="16" width="22" height="3" rx="1.5" fill="white"/>
+          <rect x="6" y="22" width="10" height="3" rx="1.5" fill="white" opacity=".7"/>
+        </svg>
+        <span class="logo-text">harview</span>
+      </div>
+      <nav class="landing-nav">
+        <a href="https://github.com/timowse/harview" target="_blank" rel="noopener" class="nav-link">
+          GitHub
+        </a>
+      </nav>
+    </header>
+
+    <main class="landing-main">
+      <h1 class="landing-headline">Inspect your HAR files.<br><span class="accent">Privately.</span></h1>
+      <p class="landing-sub">
+        Drag &amp; drop a <code>.har</code> file to explore network waterfalls,
+        filter requests, inspect headers, redact sensitive data, and export a
+        sanitised copy — all inside your browser, zero uploads.
+      </p>
+
+      <div id="drop-zone" role="button" tabindex="0" aria-label="Drop zone for HAR files">
+        <div class="drop-zone-inner">
+          <svg class="drop-icon" width="48" height="48" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+            <circle cx="24" cy="24" r="23" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
+            <path d="M24 14v14M17 21l7-7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <rect x="14" y="31" width="20" height="3" rx="1.5" fill="currentColor" opacity=".4"/>
+          </svg>
+          <p class="drop-hint">Drop a <strong>.har</strong> file here</p>
+          <p class="drop-or">— or —</p>
+          <button id="file-picker-btn" class="btn btn-primary" type="button">Browse file</button>
+        </div>
+      </div>
+
+      <input type="file" id="file-input" accept=".har,application/json" class="sr-only" aria-hidden="true" />
+
+      <ul class="feature-list">
+        <li>📊 Grafana-style waterfall chart with phase breakdown</li>
+        <li>🔍 Filter by URL, status, MIME type, HTTP method</li>
+        <li>🔒 Redact sensitive headers before sharing</li>
+        <li>📥 Export sanitised HAR file</li>
+        <li>🚫 Zero server uploads — everything stays in your browser</li>
+      </ul>
+    </main>
+
+    <footer class="landing-footer">
+      <p>
+        <a href="https://github.com/timowse/harview" target="_blank" rel="noopener">harview</a>
+        is open-source, MIT licensed.
+      </p>
+    </footer>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       APP SHELL  (shown after a HAR is loaded)
+  ════════════════════════════════════════════════════════════════════════ -->
+  <div id="app-shell" class="hidden">
+
+    <!-- Top bar -->
+    <header id="toolbar" class="toolbar">
+      <div class="toolbar-left">
+        <span class="logo-small">harview</span>
+        <span id="file-name" class="file-name-badge"></span>
+      </div>
+      <div class="toolbar-right">
+        <button id="load-new-btn" class="btn btn-secondary btn-sm" type="button">Load new file</button>
+        <button id="export-btn"   class="btn btn-primary   btn-sm" type="button">Export sanitized HAR</button>
+      </div>
+    </header>
+
+    <!-- Stats bar -->
+    <div id="stats-bar" class="stats-bar"></div>
+
+    <!-- Filter bar -->
+    <div id="filter-bar" class="filter-bar">
+      <input  id="filter-url"    type="search" placeholder="Filter by URL…"   class="filter-input" />
+      <select id="filter-status" class="filter-select">
+        <option value="">All statuses</option>
+        <option value="2xx">2xx Success</option>
+        <option value="3xx">3xx Redirect</option>
+        <option value="4xx">4xx Client Error</option>
+        <option value="5xx">5xx Server Error</option>
+        <option value="err">Failed (0)</option>
+      </select>
+      <select id="filter-type"   class="filter-select"><option value="">All types</option></select>
+      <select id="filter-method" class="filter-select"><option value="">All methods</option></select>
+      <button id="filter-clear-btn" class="btn btn-ghost btn-sm" type="button">Clear</button>
+
+      <!-- Redaction controls (collapsible) -->
+      <details class="redact-details">
+        <summary class="redact-summary">🔒 Redact headers</summary>
+        <div class="redact-controls">
+          <input id="redact-input" type="text" placeholder="header-name" class="filter-input redact-input" />
+          <button id="redact-add-btn" class="btn btn-secondary btn-sm" type="button">Add</button>
+          <div id="redact-list" class="redact-list"></div>
+        </div>
+      </details>
+    </div>
+
+    <!-- Main content: waterfall + inspector side-by-side -->
+    <div class="main-content">
+
+      <section class="waterfall-section" aria-label="Network waterfall">
+        <div id="waterfall-container"></div>
+      </section>
+
+      <aside id="inspector-panel" class="inspector-panel">
+        <p class="inspector-placeholder">Select a request to inspect.</p>
+      </aside>
+
+    </div>
+  </div>
+
+  <!-- ─── Scripts ────────────────────────────────────────────────────────── -->
+  <!-- D3.js v7 from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+
+  <!-- App modules (order matters: parser → filters → inspector → exporter → waterfall → main) -->
+  <script src="js/parser.js"></script>
+  <script src="js/filters.js"></script>
+  <script src="js/inspector.js"></script>
+  <script src="js/exporter.js"></script>
+  <script src="js/waterfall.js"></script>
+  <script src="js/main.js"></script>
+
+</body>
+</html>

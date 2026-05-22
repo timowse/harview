@@ -1,0 +1,20 @@
+# Logs
+logs/
+*.log
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node (if anyone adds a dev dependency later)
+node_modules/
+package-lock.json
+
+# Test HAR files with sensitive data
+*.sensitive.har
