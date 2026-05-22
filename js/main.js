@@ -1,102 +1,120 @@
 /**
- * main.js — Application entry point
- * Handles drag & drop, file picker, orchestrates all modules.
+ * main.js — Application entry point.
+ * Wires up all modules: drag-and-drop, file loading, filters, waterfall, inspector, exporter.
  */
 
 'use strict';
 
 const App = (() => {
 
-  // ── State ──────────────────────────────────────────────────────────────────
-  let state = {
-    harData    : null,   // raw parsed HAR result {meta,entries,pages,errors}
-    filtered   : [],     // currently filtered entries
-    selected   : null,   // selected entry for inspector
-  };
+  // ── Module state ──────────────────────────────────────────────────────────────
+  let currentHarData = null;  // full parsed result {entries, pages, meta, errors}
+  let currentFilename = '';   // original filename for export
+  let currentFiltered = [];   // currently visible entries after filtering
 
-  // ── DOM refs (populated on DOMContentLoaded) ───────────────────────────────
-  let els = {};
+  // ── Bootstrap ─────────────────────────────────────────────────────────────────
+  document.addEventListener('DOMContentLoaded', init);
 
-  // ── Init ───────────────────────────────────────────────────────────────────
   function init() {
-    els = {
-      dropZone      : document.getElementById('drop-zone'),
-      fileInput     : document.getElementById('file-input'),
-      filePicker    : document.getElementById('file-picker-btn'),
-      appShell      : document.getElementById('app-shell'),
-      landingView   : document.getElementById('landing-view'),
-      toolbar       : document.getElementById('toolbar'),
-      stats         : document.getElementById('stats-bar'),
-      errorBanner   : document.getElementById('error-banner'),
-      errorText     : document.getElementById('error-text'),
-      errorClose    : document.getElementById('error-close'),
-      loadNewBtn    : document.getElementById('load-new-btn'),
-      exportBtn     : document.getElementById('export-btn'),
-      fileName      : document.getElementById('file-name'),
-    };
 
-    bindDropZone();
-    bindFilePicker();
-    bindToolbarActions();
-    Filters.init(onFilterChange);
-  }
+    // 1. Init filters into #filter-bar (chip/new-API mode)
+    const filterBarEl = document.getElementById('filter-bar');
+    if (filterBarEl) Filters.init(filterBarEl);
 
-  // ── Drop zone ──────────────────────────────────────────────────────────────
-  function bindDropZone() {
-    const dz = els.dropZone;
-    if (!dz) return;
+    // 2. Init inspector into #inspector-panel
+    const inspectorEl = document.getElementById('inspector-panel');
+    if (inspectorEl) Inspector.init(inspectorEl);
 
-    ['dragenter', 'dragover'].forEach(evt =>
-      dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.add('drag-over'); })
-    );
-    ['dragleave', 'dragend', 'drop'].forEach(evt =>
-      dz.addEventListener(evt, e => { e.preventDefault(); dz.classList.remove('drag-over'); })
-    );
+    // 3. Drop zone setup
+    //    #drop-overlay is the full-screen backdrop (drag events)
+    //    #drop-zone    is the inner clickable area  (click events)
+    const dropOverlay  = document.getElementById('drop-overlay');
+    const dropZone     = document.getElementById('drop-zone');
+    const fileInput    = document.getElementById('file-input');
+    const filePickerBtn = document.getElementById('file-picker-btn');
 
-    dz.addEventListener('drop', e => {
-      const file = e.dataTransfer.files[0];
-      if (file) loadFile(file);
-    });
-
-    // Also allow click on the drop zone itself
-    dz.addEventListener('click', () => els.fileInput && els.fileInput.click());
-  }
-
-  // ── File picker ────────────────────────────────────────────────────────────
-  function bindFilePicker() {
-    const btn = els.filePicker;
-    const inp = els.fileInput;
-    if (btn && inp) {
-      btn.addEventListener('click', e => { e.stopPropagation(); inp.click(); });
-      inp.addEventListener('change', () => {
-        if (inp.files[0]) loadFile(inp.files[0]);
+    if (dropOverlay) {
+      // Drag highlight on the inner visual area
+      ['dragenter', 'dragover'].forEach(ev =>
+        dropOverlay.addEventListener(ev, e => {
+          e.preventDefault();
+          if (dropZone) dropZone.classList.add('drag-over');
+        })
+      );
+      ['dragleave', 'dragend', 'drop'].forEach(ev =>
+        dropOverlay.addEventListener(ev, e => {
+          e.preventDefault();
+          if (dropZone) dropZone.classList.remove('drag-over');
+        })
+      );
+      dropOverlay.addEventListener('drop', e => {
+        const file = e.dataTransfer && e.dataTransfer.files[0];
+        if (file) loadFile(file);
       });
     }
-  }
 
-  // ── Toolbar actions ────────────────────────────────────────────────────────
-  function bindToolbarActions() {
-    if (els.loadNewBtn) {
-      els.loadNewBtn.addEventListener('click', resetToLanding);
+    // Click on the inner drop zone → open file picker
+    if (dropZone) {
+      dropZone.addEventListener('click', () => fileInput && fileInput.click());
+      dropZone.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput && fileInput.click(); }
+      });
     }
-    if (els.exportBtn) {
-      els.exportBtn.addEventListener('click', () => {
-        if (state.harData) {
-          const redactList = Filters.getRedactList();
-          Exporter.exportSanitized(state.harData, redactList);
+
+    // "Browse file" button inside the drop zone
+    if (filePickerBtn) {
+      filePickerBtn.addEventListener('click', e => {
+        e.stopPropagation(); // don't bubble to dropZone's click handler
+        fileInput && fileInput.click();
+      });
+    }
+
+    // 4. File input change
+    if (fileInput) {
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files && fileInput.files[0]) loadFile(fileInput.files[0]);
+      });
+    }
+
+    // 5. Listen for filters:changed event dispatched by Filters module
+    document.addEventListener('filters:changed', e => {
+      currentFiltered = (e.detail && e.detail.filtered) || [];
+      Waterfall.render(currentFiltered, null);
+      updateCountsUI(currentFiltered);
+    });
+
+    // 6. Export button
+    const exportBtn = document.getElementById('export-btn');
+    if (exportBtn) {
+      exportBtn.addEventListener('click', () => {
+        if (currentHarData) {
+          Exporter.exportSanitizedHAR(currentHarData, currentFilename);
         }
       });
     }
-    if (els.errorClose) {
-      els.errorClose.addEventListener('click', () => {
-        els.errorBanner && els.errorBanner.classList.add('hidden');
+
+    // "Open File" / "Load new" in the top bar
+    const loadNewBtn = document.getElementById('load-new-btn');
+    if (loadNewBtn) loadNewBtn.addEventListener('click', resetApp);
+
+    // Logo as reset trigger
+    const logoReset = document.getElementById('logo-reset');
+    if (logoReset) logoReset.addEventListener('click', resetApp);
+
+    // Error banner dismiss
+    const errorClose = document.getElementById('error-close');
+    if (errorClose) {
+      errorClose.addEventListener('click', () => {
+        const banner = document.getElementById('error-banner');
+        if (banner) banner.classList.add('hidden');
       });
     }
   }
 
-  // ── File loading ───────────────────────────────────────────────────────────
+  // ── File loading ──────────────────────────────────────────────────────────────
   function loadFile(file) {
-    if (!file.name.toLowerCase().endsWith('.har') && file.type !== 'application/json') {
+    const name = (file.name || '').toLowerCase();
+    if (!name.endsWith('.har') && file.type !== 'application/json') {
       showError('Please drop a valid .har file.');
       return;
     }
@@ -109,28 +127,34 @@ const App = (() => {
       try {
         const result = HARParser.parseText(e.target.result);
 
-        if (result.errors.length && result.entries.length === 0) {
+        if (result.errors && result.errors.length && result.entries.length === 0) {
           showLoading(false);
           showError('Failed to parse HAR file: ' + result.errors.join(' | '));
           return;
         }
 
-        state.harData = result;
-        state.filtered = [...result.entries];
-        state.selected = null;
+        currentHarData = result;
+        currentFilename = file.name;
+        currentFiltered  = result.entries.slice();
 
-        if (result.errors.length) {
-          showError('Parsed with warnings: ' + result.errors.join(' | '), true);
+        if (result.errors && result.errors.length) {
+          showError('Parsed with warnings: ' + result.errors.join(' | '), /*isWarning=*/true);
         }
-
-        // Update file name display
-        if (els.fileName) els.fileName.textContent = file.name;
 
         showLoading(false);
         transitionToApp();
 
+        // Update filename display in the topbar pill
+        setElText('file-pill-name', file.name);
+
+        // Populate filter chips with real method/type data
         Filters.populate(result.entries);
-        renderAll();
+
+        // Render the waterfall
+        Waterfall.render(currentFiltered, null);
+
+        // Update all stats UI
+        updateStatsUI(result, currentFiltered);
 
       } catch (err) {
         showLoading(false);
@@ -146,70 +170,172 @@ const App = (() => {
     reader.readAsText(file);
   }
 
-  // ── Render cycle ───────────────────────────────────────────────────────────
-  function renderAll() {
-    updateStats();
-    Waterfall.render(state.filtered, onEntrySelect);
-    Inspector.clear();
-  }
-
-  function onFilterChange(filtered) {
-    state.filtered = filtered;
-    renderAll();
-    if (state.selected && !filtered.find(e => e.index === state.selected.index)) {
-      state.selected = null;
-      Inspector.clear();
-    }
-  }
-
-  function onEntrySelect(entry) {
-    state.selected = entry;
-    Inspector.show(entry, Filters.getRedactList());
-  }
-
-  // ── Stats bar ──────────────────────────────────────────────────────────────
-  function updateStats() {
-    if (!els.stats) return;
-    const entries = state.filtered;
-    const total   = entries.length;
-    const totalSize = entries.reduce((s, e) => s + Math.max(e.transferSize, 0), 0);
-    const totalTime = entries.length
-      ? (() => {
-          const minStart = Math.min(...entries.map(e => e.startOffset));
-          const maxEnd   = Math.max(...entries.map(e => e.startOffset + e.totalTime));
-          return maxEnd - minStart;
-        })()
-      : 0;
-
-    els.stats.innerHTML = `
-      <span class="stat"><strong>${total}</strong> requests</span>
-      <span class="stat"><strong>${formatBytes(totalSize)}</strong> transferred</span>
-      <span class="stat"><strong>${formatMs(totalTime)}</strong> total</span>
-      <span class="stat">(${state.harData.entries.length} total in HAR)</span>
-    `;
-  }
-
-  // ── View transitions ───────────────────────────────────────────────────────
+  // ── View transitions ──────────────────────────────────────────────────────────
   function transitionToApp() {
-    els.landingView && els.landingView.classList.add('hidden');
-    els.appShell    && els.appShell.classList.remove('hidden');
+    const dropOverlay = document.getElementById('drop-overlay');
+    const appShell    = document.getElementById('app-shell');
+    const topbar      = document.getElementById('topbar');
+    const statusbar   = document.getElementById('statusbar');
+    if (dropOverlay) dropOverlay.classList.add('hidden');
+    if (appShell)    appShell.classList.remove('hidden');
+    if (topbar)      topbar.classList.remove('hidden');
+    if (statusbar)   statusbar.classList.remove('hidden');
   }
 
-  function resetToLanding() {
-    state = { harData: null, filtered: [], selected: null };
-    els.landingView && els.landingView.classList.remove('hidden');
-    els.appShell    && els.appShell.classList.add('hidden');
+  function resetApp() {
+    currentHarData  = null;
+    currentFilename = '';
+    currentFiltered = [];
+
+    const dropOverlay = document.getElementById('drop-overlay');
+    const appShell    = document.getElementById('app-shell');
+    const topbar      = document.getElementById('topbar');
+    const statusbar   = document.getElementById('statusbar');
+    if (dropOverlay) dropOverlay.classList.remove('hidden');
+    if (appShell)    appShell.classList.add('hidden');
+    if (topbar)      topbar.classList.add('hidden');
+    if (statusbar)   statusbar.classList.add('hidden');
+
     Waterfall.clear();
     Inspector.clear();
-    if (els.fileInput) els.fileInput.value = '';
+
+    const fileInput = document.getElementById('file-input');
+    if (fileInput) fileInput.value = '';
+
+    // Reset filename pill
+    setElText('file-pill-name', '—');
   }
 
-  // ── Error display ──────────────────────────────────────────────────────────
-  function showError(msg, isWarning = false) {
-    if (!els.errorBanner) { console.error(msg); return; }
-    els.errorBanner.classList.remove('hidden', 'warning', 'error');
-    els.errorBanner.classList.add(isWarning ? 'warning' : 'error');
-    if (els.errorText) els.errorText.textContent = msg;
+  // ── Stats UI helpers ──────────────────────────────────────────────────────────
+  /**
+   * Called once on first load — updates all static stat elements.
+   * @param {Object} harResult   - Full parsed HAR {entries, meta, pages, errors}
+   * @param {Array}  filtered    - Filtered entries to display
+   */
+  function updateStatsUI(harResult, filtered) {
+    const total  = harResult.entries.length;
+    const counts = computeStats(filtered);
+
+    // ── Topbar meta pills ──
+    setElText('meta-requests', filtered.length);
+    setElText('meta-duration', fmtMs(counts.duration));
+    setElText('meta-size',     fmtBytes(counts.transfer));
+    setElText('meta-errors',   counts.errors > 0 ? counts.errors : '—');
+
+    // ── Sidebar summary grid ──
+    setElText('stat-requests', filtered.length);
+    setElText('stat-duration', fmtMs(counts.duration));
+    setElText('stat-size',     fmtBytes(counts.transfer));
+    setElText('stat-slowest',  fmtMs(counts.slowest));
+
+    // ── Sidebar status chip counts ──
+    setElText('count-2xx', filtered.filter(e => e.status >= 200 && e.status < 300).length);
+    setElText('count-3xx', filtered.filter(e => e.status >= 300 && e.status < 400).length);
+    setElText('count-4xx', filtered.filter(e => e.status >= 400 && e.status < 500).length);
+    setElText('count-5xx', filtered.filter(e => e.status >= 500).length);
+
+    // ── Filter bar request counts ──
+    setElText('count-filtered', filtered.length);
+    setElText('count-total',    total);
+
+    // ── Statusbar ──
+    setElText('sb-filtered', filtered.length);
+    setElText('sb-total',    total);
+    setElText('sb-size',     fmtBytes(counts.transfer));
+    setElText('sb-duration', fmtMs(counts.duration));
+
+    // ── Sidebar mini timeline ──
+    buildMiniTimeline(filtered);
+  }
+
+  /**
+   * Called on every filter change — updates counts and stats for the current filtered set.
+   * @param {Array} filtered
+   */
+  function updateCountsUI(filtered) {
+    if (!currentHarData) return;
+    const total  = currentHarData.entries.length;
+    const counts = computeStats(filtered);
+
+    // Topbar
+    setElText('meta-requests', filtered.length);
+    setElText('meta-duration', fmtMs(counts.duration));
+    setElText('meta-size',     fmtBytes(counts.transfer));
+    setElText('meta-errors',   counts.errors > 0 ? counts.errors : '—');
+
+    // Sidebar summary
+    setElText('stat-requests', filtered.length);
+    setElText('stat-duration', fmtMs(counts.duration));
+    setElText('stat-size',     fmtBytes(counts.transfer));
+    setElText('stat-slowest',  fmtMs(counts.slowest));
+
+    // Sidebar status chips
+    setElText('count-2xx', filtered.filter(e => e.status >= 200 && e.status < 300).length);
+    setElText('count-3xx', filtered.filter(e => e.status >= 300 && e.status < 400).length);
+    setElText('count-4xx', filtered.filter(e => e.status >= 400 && e.status < 500).length);
+    setElText('count-5xx', filtered.filter(e => e.status >= 500).length);
+
+    // Filter bar
+    setElText('count-filtered', filtered.length);
+    setElText('count-total',    total);
+
+    // Statusbar
+    setElText('sb-filtered', filtered.length);
+    setElText('sb-total',    total);
+    setElText('sb-size',     fmtBytes(counts.transfer));
+    setElText('sb-duration', fmtMs(counts.duration));
+
+    // Sidebar timeline
+    buildMiniTimeline(filtered);
+  }
+
+  /**
+   * Compute aggregate stats for an entries array.
+   */
+  function computeStats(entries) {
+    if (!entries || entries.length === 0) {
+      return { duration: 0, transfer: 0, errors: 0, slowest: 0 };
+    }
+    const transfer = entries.reduce((s, e) => s + Math.max(e.transferSize || 0, 0), 0);
+    const minStart = Math.min(...entries.map(e => e.startOffset || 0));
+    const maxEnd   = Math.max(...entries.map(e => (e.startOffset || 0) + (e.totalTime || 0)));
+    const duration = Math.max(0, maxEnd - minStart);
+    const errors   = entries.filter(e => e.status >= 400 || e.status === 0).length;
+    const slowest  = Math.max(...entries.map(e => e.totalTime || 0));
+    return { duration, transfer, errors, slowest };
+  }
+
+  // ── Mini timeline ─────────────────────────────────────────────────────────────
+  function buildMiniTimeline(entries) {
+    const container = document.getElementById('timeline-mini');
+    if (!container) return;
+    container.innerHTML = '';
+    if (!entries.length) return;
+
+    const maxTime = Math.max(...entries.map(e => e.totalTime || 0));
+    if (maxTime === 0) return;
+
+    entries.slice(0, 120).forEach(e => {
+      const bar = document.createElement('div');
+      bar.className   = 'timeline-bar';
+      const pct = Math.max(2, ((e.totalTime || 0) / maxTime) * 100);
+      bar.style.width = pct + '%';
+      if (e.status >= 500)      bar.style.background = 'var(--err)';
+      else if (e.status >= 400) bar.style.background = 'var(--warn)';
+      else if (e.status >= 300) bar.style.background = 'var(--redirect)';
+      else                       bar.style.background = 'var(--ok)';
+      container.appendChild(bar);
+    });
+  }
+
+  // ── Error / loading helpers ───────────────────────────────────────────────────
+  function showError(msg, isWarning) {
+    const banner = document.getElementById('error-banner');
+    const text   = document.getElementById('error-text');
+    if (!banner) { console.error('[harview]', msg); return; }
+    banner.classList.remove('hidden', 'warning', 'error');
+    banner.classList.add(isWarning ? 'warning' : 'error');
+    if (text) text.textContent = msg;
   }
 
   function showLoading(show) {
@@ -217,22 +343,32 @@ const App = (() => {
     if (spinner) spinner.classList.toggle('hidden', !show);
   }
 
-  // ── Utilities ──────────────────────────────────────────────────────────────
-  function formatBytes(bytes) {
-    if (bytes <= 0) return '0 B';
+  // ── DOM helper ────────────────────────────────────────────────────────────────
+  function setElText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(value);
+  }
+
+  // ── Formatters ────────────────────────────────────────────────────────────────
+  function fmtBytes(bytes) {
+    if (!bytes || bytes <= 0) return '0\u202fB';
     const units = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return (bytes / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + units[i];
+    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + '\u202f' + units[i];
   }
 
-  function formatMs(ms) {
-    if (ms < 1000) return Math.round(ms) + ' ms';
-    return (ms / 1000).toFixed(2) + ' s';
+  function fmtMs(ms) {
+    if (ms == null || ms < 0) return '—';
+    if (ms === 0) return '0\u202fms';
+    if (ms < 1000) return Math.round(ms) + '\u202fms';
+    return (ms / 1000).toFixed(2) + '\u202fs';
   }
 
-  // ── Bootstrap ─────────────────────────────────────────────────────────────
-  document.addEventListener('DOMContentLoaded', init);
-
-  return { getState: () => state, formatBytes, formatMs };
+  // ── Public surface (minimal — mostly used for debugging) ──────────────────────
+  return {
+    getHarData:   () => currentHarData,
+    getFiltered:  () => currentFiltered,
+    getFilename:  () => currentFilename,
+  };
 
 })();

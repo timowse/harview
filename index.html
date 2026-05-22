@@ -4,153 +4,398 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>harview — HAR File Inspector</title>
-  <meta name="description" content="Privacy-first HAR file inspector. Waterfall charts, request filtering, header redaction. 100% client-side." />
+  <meta name="description" content="Privacy-first HAR file inspector. Waterfall charts, request filtering, header redaction. 100% client-side, zero uploads." />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
 
-  <!-- ─── Loading spinner ──────────────────────────────────────────────── -->
-  <div id="loading-spinner" class="hidden">
+  <!-- ─── Loading Spinner ──────────────────────────────────────────────── -->
+  <div id="loading-spinner" class="loading-spinner hidden">
     <div class="spinner-ring"></div>
   </div>
 
-  <!-- ─── Error / warning banner ───────────────────────────────────────── -->
-  <div id="error-banner" class="hidden">
+  <!-- ─── Error / Warning Banner ──────────────────────────────────────── -->
+  <div id="error-banner" class="error-banner hidden">
     <span id="error-text"></span>
-    <button id="error-close" class="btn-icon" aria-label="Dismiss">×</button>
+    <button id="error-close" class="error-close" aria-label="Dismiss">×</button>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       LANDING VIEW  (shown before a HAR is loaded)
+       DROP OVERLAY  (shown before a HAR is loaded — z-index 200 covers all)
   ════════════════════════════════════════════════════════════════════════ -->
-  <div id="landing-view">
-    <header class="landing-header">
-      <div class="logo">
-        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true">
-          <rect width="36" height="36" rx="8" fill="#6366f1"/>
-          <rect x="6" y="10" width="14" height="3" rx="1.5" fill="white" opacity=".9"/>
-          <rect x="6" y="16" width="22" height="3" rx="1.5" fill="white"/>
-          <rect x="6" y="22" width="10" height="3" rx="1.5" fill="white" opacity=".7"/>
+  <div id="drop-overlay" class="drop-overlay">
+    <div class="drop-inner">
+
+      <div class="drop-logo">har<span>view</span></div>
+
+      <p class="drop-tagline">
+        <strong>Privacy-first HAR inspector.</strong><br>
+        Zero uploads &mdash; 100% client-side.
+      </p>
+
+      <!-- Drop / click area -->
+      <div id="drop-zone" class="drop-zone" role="button" tabindex="0"
+           aria-label="Drop a HAR file here or click to browse">
+        <svg class="drop-icon" viewBox="0 0 48 48" fill="none"
+             stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <circle cx="24" cy="24" r="23" stroke-dasharray="4 3"/>
+          <path d="M24 14v14M17 21l7-7 7 7"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="14" y="31" width="20" height="3" rx="1.5"
+                fill="currentColor" opacity=".4" stroke="none"/>
         </svg>
-        <span class="logo-text">harview</span>
+        <span class="drop-text">Drop a .har file here</span>
+        <span class="drop-hint">.har &nbsp;·&nbsp; application/json</span>
+        <div class="drop-or">
+          <span class="drop-or-line"></span>
+          <span class="drop-or-text">or</span>
+          <span class="drop-or-line"></span>
+        </div>
+        <button id="file-picker-btn" class="btn btn-accent" type="button">
+          Browse file
+        </button>
       </div>
-      <nav class="landing-nav">
-        <a href="https://github.com/timowse/harview" target="_blank" rel="noopener" class="nav-link">
-          GitHub
-        </a>
-      </nav>
-    </header>
 
-    <main class="landing-main">
-      <h1 class="landing-headline">Inspect your HAR files.<br><span class="accent">Privately.</span></h1>
-      <p class="landing-sub">
-        Drag &amp; drop a <code>.har</code> file to explore network waterfalls,
-        filter requests, inspect headers, redact sensitive data, and export a
-        sanitised copy — all inside your browser, zero uploads.
-      </p>
-
-      <div id="drop-zone" role="button" tabindex="0" aria-label="Drop zone for HAR files">
-        <div class="drop-zone-inner">
-          <svg class="drop-icon" width="48" height="48" viewBox="0 0 48 48" fill="none" aria-hidden="true">
-            <circle cx="24" cy="24" r="23" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 3"/>
-            <path d="M24 14v14M17 21l7-7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <rect x="14" y="31" width="20" height="3" rx="1.5" fill="currentColor" opacity=".4"/>
+      <!-- Feature list -->
+      <div class="drop-features">
+        <div class="drop-feature">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8">
+            <polyline points="2,6 5,9 10,3"/>
           </svg>
-          <p class="drop-hint">Drop a <strong>.har</strong> file here</p>
-          <p class="drop-or">— or —</p>
-          <button id="file-picker-btn" class="btn btn-primary" type="button">Browse file</button>
+          Waterfall chart
+        </div>
+        <div class="drop-feature">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8">
+            <polyline points="2,6 5,9 10,3"/>
+          </svg>
+          Header redaction
+        </div>
+        <div class="drop-feature">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8">
+            <polyline points="2,6 5,9 10,3"/>
+          </svg>
+          Export sanitized HAR
+        </div>
+        <div class="drop-feature">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8">
+            <polyline points="2,6 5,9 10,3"/>
+          </svg>
+          Zero uploads
         </div>
       </div>
 
-      <input type="file" id="file-input" accept=".har,application/json" class="sr-only" aria-hidden="true" />
+    </div><!-- /drop-inner -->
 
-      <ul class="feature-list">
-        <li>📊 Grafana-style waterfall chart with phase breakdown</li>
-        <li>🔍 Filter by URL, status, MIME type, HTTP method</li>
-        <li>🔒 Redact sensitive headers before sharing</li>
-        <li>📥 Export sanitised HAR file</li>
-        <li>🚫 Zero server uploads — everything stays in your browser</li>
-      </ul>
-    </main>
+    <!-- Hidden file input (triggered by button or drop-zone click) -->
+    <input type="file" id="file-input" accept=".har,application/json"
+           class="sr-only" aria-hidden="true" />
+  </div><!-- /drop-overlay -->
 
-    <footer class="landing-footer">
-      <p>
-        <a href="https://github.com/timowse/harview" target="_blank" rel="noopener">harview</a>
-        is open-source, MIT licensed.
-      </p>
-    </footer>
-  </div>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       APP SHELL  (shown after a HAR is loaded)
+       TOP BAR  (fixed, hidden until HAR is loaded)
   ════════════════════════════════════════════════════════════════════════ -->
-  <div id="app-shell" class="hidden">
+  <header class="topbar hidden" id="topbar">
 
-    <!-- Top bar -->
-    <header id="toolbar" class="toolbar">
-      <div class="toolbar-left">
-        <span class="logo-small">harview</span>
-        <span id="file-name" class="file-name-badge"></span>
+    <!-- Logo / reset -->
+    <a id="logo-reset" class="logo" role="button" tabindex="0" title="Load a new file">
+      <span class="logo-mark">har</span><span class="logo-mark" style="color:var(--text-1)">view</span>
+      <span class="logo-sub">&#160;&#xB7;&#160;v0.1</span>
+    </a>
+
+    <div class="topbar-divider"></div>
+
+    <!-- Loaded file name pill -->
+    <div class="file-pill">
+      <svg class="file-pill-icon" viewBox="0 0 14 14" fill="none"
+           stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+        <path d="M2 1h7l3 3v9H2z" stroke-linejoin="round"/>
+        <path d="M9 1v3h3" stroke-linejoin="round"/>
+      </svg>
+      <span class="file-pill-name" id="file-pill-name">—</span>
+    </div>
+
+    <!-- Meta stats -->
+    <div class="topbar-meta">
+      <div class="meta-stat">
+        <span class="meta-val" id="meta-requests">—</span>
+        <span class="meta-lbl">requests</span>
       </div>
-      <div class="toolbar-right">
-        <button id="load-new-btn" class="btn btn-secondary btn-sm" type="button">Load new file</button>
-        <button id="export-btn"   class="btn btn-primary   btn-sm" type="button">Export sanitized HAR</button>
+      <div class="meta-stat">
+        <span class="meta-val" id="meta-duration">—</span>
+        <span class="meta-lbl">total</span>
       </div>
-    </header>
+      <div class="meta-stat">
+        <span class="meta-val" id="meta-size">—</span>
+        <span class="meta-lbl">transferred</span>
+      </div>
+      <div class="meta-stat">
+        <span class="meta-val" id="meta-errors" style="color:var(--err)">—</span>
+        <span class="meta-lbl">errors</span>
+      </div>
+    </div>
 
-    <!-- Stats bar -->
-    <div id="stats-bar" class="stats-bar"></div>
+    <!-- Action buttons -->
+    <div class="topbar-actions">
+      <button class="btn btn-danger" id="export-btn" type="button">
+        <svg viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.4"
+             aria-hidden="true">
+          <circle cx="6.5" cy="6.5" r="5.5"/>
+          <path d="M4 6.5h5M8 4.5l2 2-2 2" stroke-linecap="round"/>
+        </svg>
+        Export Clean HAR
+      </button>
+      <button class="btn btn-ghost" id="load-new-btn" type="button">Open File</button>
+    </div>
 
-    <!-- Filter bar -->
-    <div id="filter-bar" class="filter-bar">
-      <input  id="filter-url"    type="search" placeholder="Filter by URL…"   class="filter-input" />
-      <select id="filter-status" class="filter-select">
-        <option value="">All statuses</option>
-        <option value="2xx">2xx Success</option>
-        <option value="3xx">3xx Redirect</option>
-        <option value="4xx">4xx Client Error</option>
-        <option value="5xx">5xx Server Error</option>
-        <option value="err">Failed (0)</option>
-      </select>
-      <select id="filter-type"   class="filter-select"><option value="">All types</option></select>
-      <select id="filter-method" class="filter-select"><option value="">All methods</option></select>
-      <button id="filter-clear-btn" class="btn btn-ghost btn-sm" type="button">Clear</button>
+  </header><!-- /topbar -->
 
-      <!-- Redaction controls (collapsible) -->
-      <details class="redact-details">
-        <summary class="redact-summary">🔒 Redact headers</summary>
-        <div class="redact-controls">
-          <input id="redact-input" type="text" placeholder="header-name" class="filter-input redact-input" />
-          <button id="redact-add-btn" class="btn btn-secondary btn-sm" type="button">Add</button>
-          <div id="redact-list" class="redact-list"></div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       APP SHELL  (shown after HAR is loaded; hidden initially)
+  ════════════════════════════════════════════════════════════════════════ -->
+  <div class="app-shell hidden" id="app-shell">
+
+    <!-- ── SIDEBAR ─────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="sidebar-scroll">
+
+        <!-- Search / URL filter -->
+        <div class="sidebar-section">
+          <div class="sidebar-label">Search</div>
+          <div class="search-wrap">
+            <svg class="search-icon" viewBox="0 0 13 13" fill="none"
+                 stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+              <circle cx="5.5" cy="5.5" r="4"/>
+              <path d="M9 9l2.5 2.5" stroke-linecap="round"/>
+            </svg>
+            <input class="search-input" id="filter-url" type="text"
+                   placeholder="filter url, domain, header…"
+                   autocomplete="off" spellcheck="false" />
+          </div>
         </div>
-      </details>
-    </div>
 
-    <!-- Main content: waterfall + inspector side-by-side -->
-    <div class="main-content">
+        <!-- Status filter chips -->
+        <div class="sidebar-section">
+          <div class="sidebar-label">Status</div>
+          <div class="filter-chips" id="status-chips">
+            <div class="chip" data-status="2xx">
+              <span class="chip-dot" style="background:var(--ok)"></span>
+              2xx <span class="chip-count" id="count-2xx">0</span>
+            </div>
+            <div class="chip" data-status="3xx">
+              <span class="chip-dot" style="background:var(--redirect)"></span>
+              3xx <span class="chip-count" id="count-3xx">0</span>
+            </div>
+            <div class="chip" data-status="4xx">
+              <span class="chip-dot" style="background:var(--warn)"></span>
+              4xx <span class="chip-count" id="count-4xx">0</span>
+            </div>
+            <div class="chip" data-status="5xx">
+              <span class="chip-dot" style="background:var(--err)"></span>
+              5xx <span class="chip-count" id="count-5xx">0</span>
+            </div>
+          </div>
+          <!-- Backing select (used by filters.js — kept out of visual flow) -->
+          <select id="filter-status" class="sr-only" aria-hidden="true">
+            <option value="">All statuses</option>
+            <option value="2xx">2xx Success</option>
+            <option value="3xx">3xx Redirect</option>
+            <option value="4xx">4xx Client Error</option>
+            <option value="5xx">5xx Server Error</option>
+            <option value="err">Failed (0)</option>
+          </select>
+        </div>
 
-      <section class="waterfall-section" aria-label="Network waterfall">
+        <!-- Method filter chips -->
+        <div class="sidebar-section">
+          <div class="sidebar-label">Method</div>
+          <div class="filter-chips" id="method-chips">
+            <!-- populated dynamically from HAR data -->
+          </div>
+          <!-- Backing select populated + read by filters.js -->
+          <select id="filter-method" class="sr-only" aria-hidden="true">
+            <option value="">All methods</option>
+          </select>
+        </div>
+
+        <!-- Resource type filter chips -->
+        <div class="sidebar-section">
+          <div class="sidebar-label">Type</div>
+          <div class="filter-chips" id="type-chips">
+            <!-- populated dynamically from HAR data -->
+          </div>
+          <!-- Backing select populated + read by filters.js -->
+          <select id="filter-type" class="sr-only" aria-hidden="true">
+            <option value="">All types</option>
+          </select>
+        </div>
+
+        <!-- Summary Stats grid -->
+        <div class="sidebar-section">
+          <div class="sidebar-label">Summary</div>
+          <div class="sidebar-stats">
+            <div class="stat-cell">
+              <span class="stat-cell-val" id="stat-requests">0</span>
+              <span class="stat-cell-lbl">Requests</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-cell-val accent" id="stat-duration">—</span>
+              <span class="stat-cell-lbl">Duration</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-cell-val" id="stat-size">—</span>
+              <span class="stat-cell-lbl">Transferred</span>
+            </div>
+            <div class="stat-cell">
+              <span class="stat-cell-val warn" id="stat-slowest">—</span>
+              <span class="stat-cell-lbl">Slowest</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Request Timeline mini -->
+        <div class="sidebar-section">
+          <div class="sidebar-label">Request Timeline</div>
+          <div class="timeline-mini" id="timeline-mini">
+            <!-- bars inserted dynamically -->
+          </div>
+        </div>
+
+        <!-- Sensitive data / redaction -->
+        <div class="sidebar-section">
+          <div class="sidebar-label">Sensitive Data</div>
+          <div id="redact-list" class="redact-list"></div>
+          <div style="margin-top:8px;display:flex;gap:6px;align-items:center">
+            <div class="search-wrap" style="flex:1">
+              <input id="redact-input" type="text" placeholder="header-name"
+                     class="search-input" style="padding-left:10px"
+                     autocomplete="off" spellcheck="false" />
+            </div>
+            <button id="redact-add-btn" class="btn btn-ghost"
+                    type="button" style="flex-shrink:0;padding:5px 10px">Add</button>
+          </div>
+          <div style="margin-top:8px">
+            <button id="filter-clear-btn" class="btn btn-ghost"
+                    type="button" style="width:100%;justify-content:center;font-size:11px">
+              Clear All Filters
+            </button>
+          </div>
+        </div>
+
+      </div><!-- /sidebar-scroll -->
+    </aside>
+
+
+    <!-- ── MAIN PANEL ─────────────────────────────────── -->
+    <main class="main-panel">
+
+      <!-- Filter / type segmented bar -->
+      <div class="filter-bar" id="filter-bar">
+        <div class="filter-bar-search">
+          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor"
+               stroke-width="1.4" aria-hidden="true">
+            <circle cx="5" cy="5" r="3.5"/>
+            <path d="M8 8l2.5 2.5" stroke-linecap="round"/>
+          </svg>
+          <input type="text" id="filter-url-bar" placeholder="filter by url…"
+                 autocomplete="off" spellcheck="false" />
+        </div>
+
+        <!-- Type quick-filter segment buttons -->
+        <div class="filter-seg" id="type-seg">
+          <button class="seg-btn active" data-type="" type="button">All</button>
+          <button class="seg-btn" data-type="json"       type="button">XHR</button>
+          <button class="seg-btn" data-type="script"     type="button">JS</button>
+          <button class="seg-btn" data-type="stylesheet" type="button">CSS</button>
+          <button class="seg-btn" data-type="image"      type="button">Img</button>
+          <button class="seg-btn" data-type="document"   type="button">Doc</button>
+        </div>
+
+        <div class="filter-bar-right">
+          <div class="count-display">
+            <span id="count-filtered">0</span> / <span id="count-total">0</span> requests
+          </div>
+        </div>
+      </div><!-- /filter-bar -->
+
+      <!-- Timing phase legend -->
+      <div class="wf-legend">
+        <span class="legend-lbl">Timing:</span>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:var(--t-dns)"></span>DNS
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:var(--t-conn)"></span>Connect
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:var(--t-ssl)"></span>SSL
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:var(--t-wait)"></span>Wait
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:var(--t-recv)"></span>Receive
+        </div>
+      </div>
+
+      <!-- D3 waterfall chart renders here -->
+      <div class="waterfall-wrap pb-22">
         <div id="waterfall-container"></div>
-      </section>
+      </div>
 
-      <aside id="inspector-panel" class="inspector-panel">
-        <p class="inspector-placeholder">Select a request to inspect.</p>
-      </aside>
+    </main><!-- /main-panel -->
 
+
+    <!-- ── DETAIL / INSPECTOR PANEL ──────────────────── -->
+    <aside class="detail-panel" id="inspector-panel">
+      <p class="inspector-placeholder">Select a request to inspect.</p>
+    </aside>
+
+  </div><!-- /app-shell -->
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       STATUS BAR  (fixed bottom, hidden until HAR is loaded)
+  ════════════════════════════════════════════════════════════════════════ -->
+  <div class="statusbar hidden" id="statusbar">
+    <div class="sb-item">
+      <strong id="sb-filtered">0</strong>&nbsp;/&nbsp;<strong id="sb-total">0</strong> requests
     </div>
-  </div>
+    <div class="sb-item">
+      <strong id="sb-size">—</strong> transferred
+    </div>
+    <div class="sb-item">
+      Finish: <strong id="sb-duration">—</strong>
+    </div>
+    <div class="sb-item sb-right sb-privacy">
+      <svg viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5"
+           aria-hidden="true">
+        <path d="M5.5 1L1 3v3c0 2.5 2 4.5 4.5 5C10 11 10 8.5 10 6V3z"
+              stroke-linejoin="round"/>
+        <path d="M3.5 5.5l1.5 1.5 2.5-3"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      100% client-side &nbsp;&#xB7;&nbsp; zero uploads
+    </div>
+  </div><!-- /statusbar -->
 
-  <!-- ─── Scripts ────────────────────────────────────────────────────────── -->
-  <!-- D3.js v7 from CDN -->
+
+  <!-- ─── D3 v7 ──────────────────────────────────────────────────────────── -->
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 
-  <!-- App modules (order matters: parser → filters → inspector → exporter → waterfall → main) -->
+  <!-- ─── App modules (load order matters) ───────────────────────────────── -->
   <script src="js/parser.js"></script>
+  <script src="js/waterfall.js"></script>
   <script src="js/filters.js"></script>
   <script src="js/inspector.js"></script>
   <script src="js/exporter.js"></script>
-  <script src="js/waterfall.js"></script>
   <script src="js/main.js"></script>
 
 </body>

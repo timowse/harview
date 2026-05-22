@@ -1,117 +1,208 @@
 /**
- * inspector.js — Request/Response detail panel
- * Shows headers, timing breakdown, body preview for a selected HAR entry.
+ * inspector.js — Request / Response detail panel
+ *
+ * New API:  Inspector.init(containerEl)
+ *           Mounts the panel into containerEl and listens for
+ *           'entry:select' CustomEvents on document.
+ *
+ * Legacy:   Inspector.show(entry, redactSet)  — called directly by main.js
+ *           Inspector.clear()
  */
 
 'use strict';
 
 const Inspector = (() => {
 
-  // ── Show entry details ─────────────────────────────────────────────────────
-  function show(entry, redactSet) {
-    const panel = document.getElementById('inspector-panel');
-    if (!panel) return;
-    panel.innerHTML = '';
-    panel.classList.remove('hidden');
+  // Sensitive header names (always highlighted in the UI)
+  const SENSITIVE = new Set([
+    'authorization', 'cookie', 'set-cookie', 'x-api-key', 'x-auth-token',
+  ]);
 
-    panel.appendChild(buildSummary(entry));
-    panel.appendChild(buildTimingBreakdown(entry));
-    panel.appendChild(buildHeadersSection('Request Headers', entry.requestHeaders, redactSet));
-    panel.appendChild(buildHeadersSection('Response Headers', entry.responseHeaders, redactSet));
-    if (entry.requestBody) panel.appendChild(buildBodySection('Request Body', entry.requestBody));
-    if (entry.responseContent) panel.appendChild(buildBodySection('Response Body', entry.responseContent));
+  let _containerEl  = null;
+  let _activeTab    = 'headers';
+  let _currentEntry = null;
+
+  // ── init ───────────────────────────────────────────────────────────────────
+  function init(containerEl) {
+    _containerEl = containerEl;
+    _showPlaceholder();
+
+    // Listen for entry selection events dispatched on document
+    document.addEventListener('entry:select', e => {
+      _currentEntry = e.detail && e.detail.entry;
+      const redactSet = (e.detail && e.detail.redactSet) || new Set();
+      if (_currentEntry) _buildPanel(_containerEl, _currentEntry, redactSet);
+    });
   }
 
-  // ── Summary ────────────────────────────────────────────────────────────────
-  function buildSummary(e) {
-    const div = el('div', 'inspector-section inspector-summary');
-    div.innerHTML = `
-      <h3 class="inspector-title">
-        <span class="badge method-badge method-${e.method.toLowerCase()}">${e.method}</span>
-        <span class="status-badge status-${Math.floor(e.status/100)}xx">${e.status} ${e.statusText}</span>
-        <span class="type-badge">${e.type}</span>
-      </h3>
-      <div class="url-full" title="${escHtml(e.url)}">${escHtml(e.url)}</div>
-      <div class="inspector-meta">
-        <span><strong>Total:</strong> ${fmtMs(e.totalTime)}</span>
-        <span><strong>Size:</strong> ${fmtBytes(Math.max(e.transferSize, 0))}</span>
-        <span><strong>Started:</strong> ${e.startedDateTime || 'unknown'}</span>
-      </div>
-    `;
+  // ── show (legacy / direct call) ────────────────────────────────────────────
+  function show(entry, redactSet) {
+    _currentEntry = entry;
+    const target  = _containerEl || document.getElementById('inspector-panel');
+    if (!target) return;
+    _buildPanel(target, entry, redactSet || new Set());
+  }
+
+  // ── clear ──────────────────────────────────────────────────────────────────
+  function clear() {
+    _currentEntry = null;
+    const target = _containerEl || document.getElementById('inspector-panel');
+    if (target) _showPlaceholder(target);
+  }
+
+  // ── Internal helpers ───────────────────────────────────────────────────────
+  function _showPlaceholder(el) {
+    const target = el || _containerEl;
+    if (!target) return;
+    target.innerHTML = '';
+    const p = _mk('p', 'inspector-placeholder');
+    p.textContent = 'Select a request to inspect.';
+    target.appendChild(p);
+  }
+
+  // ── Main panel builder ─────────────────────────────────────────────────────
+  function _buildPanel(container, entry, redactSet) {
+    container.innerHTML = '';
+    _activeTab = _activeTab || 'headers';
+
+    // Summary strip
+    container.appendChild(_buildSummary(entry));
+
+    // Tab bar
+    const tabs   = ['headers', 'timings', 'preview'];
+    const panels = {};
+    const tabBar = _mk('div', 'inspector-tabs');
+
+    tabs.forEach(tab => {
+      const btn = _mk('button', 'inspector-tab' + (tab === _activeTab ? ' active' : ''));
+      btn.type        = 'button';
+      btn.dataset.tab = tab;
+      btn.textContent = tab.charAt(0).toUpperCase() + tab.slice(1);
+      btn.addEventListener('click', () => {
+        _activeTab = tab;
+        tabBar.querySelectorAll('.inspector-tab')
+          .forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+        Object.entries(panels).forEach(([k, p]) => p.classList.toggle('hidden', k !== tab));
+      });
+      tabBar.appendChild(btn);
+    });
+    container.appendChild(tabBar);
+
+    // Build each tab panel
+    const headersPanel = _buildHeadersPanel(entry, redactSet);
+    headersPanel.classList.add('inspector-tab-panel');
+    if (_activeTab !== 'headers') headersPanel.classList.add('hidden');
+    panels['headers'] = headersPanel;
+
+    const timingsPanel = _buildTimingsPanel(entry);
+    timingsPanel.classList.add('inspector-tab-panel');
+    if (_activeTab !== 'timings') timingsPanel.classList.add('hidden');
+    panels['timings'] = timingsPanel;
+
+    const previewPanel = _buildPreviewPanel(entry);
+    previewPanel.classList.add('inspector-tab-panel');
+    if (_activeTab !== 'preview') previewPanel.classList.add('hidden');
+    panels['preview'] = previewPanel;
+
+    container.appendChild(headersPanel);
+    container.appendChild(timingsPanel);
+    container.appendChild(previewPanel);
+  }
+
+  // ── Summary strip ──────────────────────────────────────────────────────────
+  function _buildSummary(e) {
+    const div    = _mk('div', 'inspector-summary');
+    const status = e.status || 0;
+    let statusCls = 'ok';
+    if (status >= 500)      statusCls = 'err';
+    else if (status >= 400) statusCls = 'warn';
+    else if (status >= 300) statusCls = 'redirect';
+
+    div.innerHTML =
+      '<div class="inspector-summary-row">' +
+        '<span class="badge-method method-' + _esc(e.method.toLowerCase()) + '">' + _esc(e.method) + '</span>' +
+        '<span class="badge-status status-' + statusCls + '">' + status + ' ' + _esc(e.statusText || '') + '</span>' +
+        '<span class="badge-type">' + _esc(e.type || '') + '</span>' +
+        '<span class="inspector-time">' + _fmtMs(e.totalTime) + '</span>' +
+        '<span class="inspector-size">' + _fmtBytes(Math.max(e.transferSize || 0, 0)) + '</span>' +
+      '</div>' +
+      '<div class="inspector-url" title="' + _esc(e.url) + '">' + _esc(e.url) + '</div>';
     return div;
   }
 
-  // ── Timing breakdown ────────────────────────────────────────────────────────
-  function buildTimingBreakdown(e) {
-    const section = el('div', 'inspector-section');
-    section.appendChild(sectionTitle('Timing Breakdown'));
-
-    const phases = [
-      { key: 'blocked', label: 'Blocked'   },
-      { key: 'dns',     label: 'DNS'       },
-      { key: 'connect', label: 'Connect'   },
-      { key: 'ssl',     label: 'TLS/SSL'   },
-      { key: 'send',    label: 'Send'      },
-      { key: 'wait',    label: 'Wait (TTFB)' },
-      { key: 'receive', label: 'Receive'   },
-    ];
-
-    const total = e.totalTime || 1;
-    const table = el('table', 'timing-table');
-    phases.forEach(({ key, label }) => {
-      const ms = e.timings[key] ?? -1;
-      if (ms < 0) return;
-      const pct = Math.min(100, (ms / total) * 100).toFixed(1);
-      const tr  = el('tr');
-      tr.innerHTML = `
-        <td class="timing-label">${label}</td>
-        <td class="timing-bar-cell">
-          <div class="timing-bar-inner phase-${key}" style="width:${pct}%"></div>
-        </td>
-        <td class="timing-value">${fmtMs(ms)}</td>
-      `;
-      table.appendChild(tr);
-    });
-
-    const totalRow = el('tr', 'timing-total-row');
-    totalRow.innerHTML = `<td>Total</td><td></td><td class="timing-value">${fmtMs(e.totalTime)}</td>`;
-    table.appendChild(totalRow);
-
-    section.appendChild(table);
-    return section;
+  // ── HEADERS tab ────────────────────────────────────────────────────────────
+  function _buildHeadersPanel(entry, redactSet) {
+    const panel = _mk('div');
+    panel.appendChild(_buildHeadersSection('Request Headers',  entry.requestHeaders,  redactSet));
+    panel.appendChild(_buildHeadersSection('Response Headers', entry.responseHeaders, redactSet));
+    return panel;
   }
 
-  // ── Headers table ──────────────────────────────────────────────────────────
-  function buildHeadersSection(title, headers, redactSet) {
-    const section = el('div', 'inspector-section');
-    const titleEl = sectionTitle(title);
+  function _buildHeadersSection(title, headers, redactSet) {
+    const section = _mk('div', 'inspector-section');
+    const h       = _mk('h4', 'inspector-section-title');
 
-    // Collapse toggle
+    // Collapsible toggle
     let collapsed = false;
-    titleEl.style.cursor = 'pointer';
-    titleEl.addEventListener('click', () => {
+    h.textContent  = title;
+    h.style.cursor = 'pointer';
+    h.addEventListener('click', () => {
       collapsed = !collapsed;
       body.classList.toggle('hidden', collapsed);
-      titleEl.classList.toggle('collapsed', collapsed);
+      h.classList.toggle('collapsed', collapsed);
     });
-    section.appendChild(titleEl);
+    section.appendChild(h);
 
-    const body = el('div', 'headers-body');
+    const body    = _mk('div', 'headers-body');
     const entries = Object.entries(headers || {});
 
-    if (entries.length === 0) {
-      body.innerHTML = '<p class="empty-msg">No headers.</p>';
+    if (!entries.length) {
+      const em = _mk('p', 'inspector-empty');
+      em.textContent = 'No headers.';
+      body.appendChild(em);
     } else {
-      const table = el('table', 'headers-table');
+      const table = _mk('table', 'headers-table');
+
       entries.forEach(([name, value]) => {
-        const isRedacted = redactSet && redactSet.has(name.toLowerCase());
-        const tr = el('tr', isRedacted ? 'header-redacted' : '');
-        tr.innerHTML = `
-          <td class="header-name">${escHtml(name)}</td>
-          <td class="header-value">${isRedacted ? '<em>[redacted]</em>' : escHtml(value)}</td>
-        `;
+        const nameLower   = name.toLowerCase();
+        const isSensitive = SENSITIVE.has(nameLower) || (redactSet && redactSet.has(nameLower));
+
+        const tr    = _mk('tr', 'header-row' + (isSensitive ? ' header-sensitive' : ''));
+        const tdName = _mk('td', 'header-name');
+        const tdVal  = _mk('td', 'header-value');
+
+        tdName.textContent = name;
+
+        if (isSensitive) {
+          // Highlight header name in red
+          tdName.style.color = '#c94040';
+
+          // Value span (also red) + Redact button
+          const valueSpan = _mk('span', 'header-value-text');
+          valueSpan.textContent = value;
+          valueSpan.style.color = '#c94040';
+
+          const redactBtn = _mk('button', 'btn-redact');
+          redactBtn.type        = 'button';
+          redactBtn.textContent = 'Redact';
+          redactBtn.addEventListener('click', () => {
+            valueSpan.textContent = '[REDACTED]';
+            redactBtn.disabled    = true;
+            redactBtn.textContent = 'Redacted';
+            tr.classList.add('header-redacted');
+          });
+
+          tdVal.appendChild(valueSpan);
+          tdVal.appendChild(redactBtn);
+        } else {
+          tdVal.textContent = value;
+        }
+
+        tr.appendChild(tdName);
+        tr.appendChild(tdVal);
         table.appendChild(tr);
       });
+
       body.appendChild(table);
     }
 
@@ -119,70 +210,128 @@ const Inspector = (() => {
     return section;
   }
 
-  // ── Body preview ───────────────────────────────────────────────────────────
-  function buildBodySection(title, bodyData) {
-    const section = el('div', 'inspector-section');
-    section.appendChild(sectionTitle(title));
+  // ── TIMINGS tab ────────────────────────────────────────────────────────────
+  function _buildTimingsPanel(entry) {
+    const panel   = _mk('div', 'inspector-section');
+    const h       = _mk('h4', 'inspector-section-title');
+    h.textContent = 'Timing Breakdown';
+    panel.appendChild(h);
 
-    const pre = el('pre', 'body-preview');
-    let text = '';
+    const timings = entry.timings || {};
+    const total   = entry.totalTime || 1;
 
-    if (typeof bodyData === 'object') {
-      if (bodyData.text) {
-        text = bodyData.text;
-        const mime = (bodyData.mimeType || '').toLowerCase();
+    const phases = [
+      { key: 'dns',     label: 'DNS',          color: 'var(--t-dns)'  },
+      { key: 'connect', label: 'TCP Connect',   color: 'var(--t-conn)' },
+      { key: 'ssl',     label: 'TLS / SSL',     color: '#c97dd4'       },
+      { key: 'wait',    label: 'Wait (TTFB)',    color: 'var(--t-wait)' },
+      { key: 'receive', label: 'Receive',        color: 'var(--t-recv)' },
+      { key: 'blocked', label: 'Blocked',        color: 'var(--text-3)' },
+      { key: 'send',    label: 'Send',           color: 'var(--accent)' },
+    ];
+
+    const table = _mk('table', 'timing-table');
+
+    phases.forEach(function(phase) {
+      const ms = (timings[phase.key] !== undefined) ? timings[phase.key] : -1;
+      if (ms < 0) return;
+      const pct = Math.min(100, (ms / total) * 100).toFixed(1);
+
+      const tr = _mk('tr', 'timing-row');
+
+      const tdLabel = _mk('td', 'timing-label');
+      tdLabel.textContent = phase.label;
+
+      const tdBar = _mk('td', 'timing-bar-cell');
+      const track = _mk('div', 'timing-bar-track');
+      const fill  = _mk('div', 'timing-bar-fill');
+      fill.style.width      = pct + '%';
+      fill.style.background = phase.color;
+      track.appendChild(fill);
+      tdBar.appendChild(track);
+
+      const tdVal = _mk('td', 'timing-value');
+      tdVal.textContent = _fmtMs(ms);
+
+      tr.appendChild(tdLabel);
+      tr.appendChild(tdBar);
+      tr.appendChild(tdVal);
+      table.appendChild(tr);
+    });
+
+    // Total row
+    const totalRow = _mk('tr', 'timing-total-row');
+    const ttdLabel = _mk('td', 'timing-label');
+    ttdLabel.innerHTML = '<strong>Total</strong>';
+    const ttdEmpty = _mk('td');
+    const ttdVal   = _mk('td', 'timing-value');
+    ttdVal.innerHTML = '<strong>' + _fmtMs(entry.totalTime) + '</strong>';
+    totalRow.appendChild(ttdLabel);
+    totalRow.appendChild(ttdEmpty);
+    totalRow.appendChild(ttdVal);
+    table.appendChild(totalRow);
+
+    panel.appendChild(table);
+    return panel;
+  }
+
+  // ── PREVIEW tab ────────────────────────────────────────────────────────────
+  function _buildPreviewPanel(entry) {
+    const panel   = _mk('div', 'inspector-section');
+    const h       = _mk('h4', 'inspector-section-title');
+    h.textContent = 'Response Preview';
+    panel.appendChild(h);
+
+    const body = entry.responseContent || entry.responseBody;
+    let text   = '';
+
+    if (body && typeof body === 'object') {
+      if (body.text) {
+        text = body.text;
+        const mime = (body.mimeType || '').toLowerCase();
         if (mime.includes('json')) {
-          try { text = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+          try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (_e) { /* keep raw */ }
         }
-      } else if (bodyData.encoding === 'base64') {
-        text = '[base64 encoded — ' + fmtBytes((bodyData.text || '').length * 0.75) + ']';
+      } else if (body.encoding === 'base64') {
+        text = '[base64 encoded \u2014 ' + _fmtBytes((body.text || '').length * 0.75) + ']';
       }
-    } else if (typeof bodyData === 'string') {
-      text = bodyData;
+    } else if (typeof body === 'string') {
+      text = body;
     }
 
+    const pre = _mk('pre', 'body-preview');
     pre.textContent = text || '(empty)';
-    section.appendChild(pre);
-    return section;
+    panel.appendChild(pre);
+    return panel;
   }
 
-  // ── Clear panel ────────────────────────────────────────────────────────────
-  function clear() {
-    const panel = document.getElementById('inspector-panel');
-    if (panel) {
-      panel.innerHTML = '<p class="inspector-placeholder">Select a request to inspect.</p>';
-    }
-  }
-
-  // ── Helpers ────────────────────────────────────────────────────────────────
-  function el(tag, cls = '') {
+  // ── DOM / formatting helpers ───────────────────────────────────────────────
+  function _mk(tag, cls) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
     return e;
   }
-  function sectionTitle(text) {
-    const h = el('h4', 'inspector-section-title');
-    h.textContent = text;
-    return h;
-  }
-  function escHtml(s) {
+
+  function _esc(s) {
     return String(s)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
   }
-  function fmtMs(ms) {
-    if (ms < 0) return 'n/a';
+
+  function _fmtMs(ms) {
+    if (ms == null || ms < 0) return 'n/a';
     return ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(2) + ' s';
   }
-  function fmtBytes(b) {
+
+  function _fmtBytes(b) {
     if (b <= 0) return '0 B';
     const u = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(b) / Math.log(1024));
     return (b / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + u[i];
   }
 
-  return { show, clear };
+  return { init, show, clear };
 
 })();
