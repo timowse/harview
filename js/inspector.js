@@ -29,8 +29,11 @@ const Inspector = (() => {
 
     // Listen for entry selection events dispatched on document
     document.addEventListener('entry:select', e => {
-      _currentEntry = e.detail && e.detail.entry;
-      const redactSet = (e.detail && e.detail.redactSet) || new Set();
+      // waterfall.js dispatches { detail: entry } directly;
+      // support both { detail: entry } and { detail: { entry, redactSet } }
+      const payload = e.detail;
+      _currentEntry = (payload && payload.entry) ? payload.entry : payload;
+      const redactSet = (payload && payload.redactSet) || new Set();
       if (_currentEntry) _buildPanel(_containerEl, _currentEntry, redactSet);
     });
   }

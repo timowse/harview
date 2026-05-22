@@ -78,6 +78,7 @@ const App = (() => {
 
     // 5. Listen for filters:changed event dispatched by Filters module
     document.addEventListener('filters:changed', e => {
+      if (!currentHarData) return; // ignore events fired before a file is loaded
       currentFiltered = (e.detail && e.detail.filtered) || [];
       Waterfall.render(currentFiltered, null);
       updateCountsUI(currentFiltered);
