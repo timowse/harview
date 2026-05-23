@@ -25,6 +25,9 @@ const App = (() => {
     const inspectorEl = document.getElementById('inspector-panel');
     if (inspectorEl) Inspector.init(inspectorEl);
 
+    // 2b. Detail panel resize handle
+    initDetailPanelResize();
+
     // 3. Drop zone setup
     //    #drop-overlay is the full-screen backdrop (drag events)
     //    #drop-zone    is the inner clickable area  (click events)
@@ -373,3 +376,50 @@ const App = (() => {
   };
 
 })();
+
+// ── Detail Panel Resize ────────────────────────────────────────────────────────
+function initDetailPanelResize() {
+  const handle = document.getElementById('detail-resize-handle');
+  const panel  = document.getElementById('inspector-panel');
+  if (!handle || !panel) return;
+
+  const STORAGE_KEY = 'harview_detail_width';
+  const MIN_WIDTH   = 280;
+  const MAX_RATIO   = 0.8; // 80vw max
+
+  // Restore saved width
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) panel.style.width = saved + 'px';
+
+  let dragging   = false;
+  let startX     = 0;
+  let startWidth = 0;
+
+  handle.addEventListener('mousedown', (e) => {
+    dragging   = true;
+    startX     = e.clientX;
+    startWidth = panel.getBoundingClientRect().width;
+    handle.classList.add('dragging');
+    document.body.style.cursor    = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const delta    = startX - e.clientX; // drag left = wider
+    const maxWidth = Math.floor(window.innerWidth * MAX_RATIO);
+    const newWidth = Math.min(maxWidth, Math.max(MIN_WIDTH, startWidth + delta));
+    panel.style.width = newWidth + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor     = '';
+    document.body.style.userSelect = '';
+    // Persist
+    localStorage.setItem(STORAGE_KEY, Math.round(panel.getBoundingClientRect().width));
+  });
+}

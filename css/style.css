@@ -963,6 +963,8 @@ tr.redacted td { text-decoration: line-through; text-decoration-color: var(--err
 /* ── Detail / Inspector Panel ───────────────────────── */
 .detail-panel {
   width: var(--detail-w);
+  min-width: 280px;
+  max-width: 80vw;
   flex-shrink: 0;
   background: var(--surf-1);
   border-left: 1px solid var(--border);
@@ -970,6 +972,25 @@ tr.redacted td { text-decoration: line-through; text-decoration-color: var(--err
   flex-direction: column;
   overflow: hidden;
   overflow-y: auto;
+  position: relative;
+}
+
+/* Drag handle at the left edge of the detail panel */
+.detail-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s;
+}
+.detail-resize-handle:hover,
+.detail-resize-handle.dragging {
+  background: var(--accent);
+  opacity: 0.5;
 }
 
 .detail-header {
